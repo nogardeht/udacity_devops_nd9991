@@ -11,4 +11,3 @@ then
 else
     echo "usage: ./upload-stack.sh <stack_name> <filename> <parameters> <region>"
 fi
-#aws cloudformation create-stack --stack-name ${1} --template-body file://${2} --parameters ${3} --region=${4}
