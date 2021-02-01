@@ -1,0 +1,132 @@
+Description:
+  Diego Marciano / Udacity
+  This template deploys a vpc extenstion of a private network
+Parameters:
+  EnvironmentName:
+    Description: An environment name that will be prefixed to resources
+    Type: String
+  VpcCIDR:
+    Description: Please enter the IP range (CIDR notation) for this network
+    Type: String
+    Default: 10.0.0.0/16
+  PrivateSubnet1CIDR:
+    Description: Please enter the IP range (CIDR notation) for this network
+    Type: String
+    Default: 10.0.0.0/24
+  PrivateSubnet2CIDR:
+    Description: Please enter the IP range (CIDR notation) for this network
+    Type: String
+    Default: 10.0.1.0/24
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Ref EnvironmentName
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: !Ref PrivateSubnet1CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Private Subnet (AZ1)
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: !Ref PrivateSubnet2CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Private Subnet (AZ2)
+  VPNGateway: 
+    Type: AWS::EC2::VPNGateway
+    Properties: 
+        Type: ipsec.1
+        Tags: 
+        - Key: Name
+          Value: !Sub ${EnvironmentName} VPN GW
+  VPNCustomerGateway: 
+    Type: AWS::EC2::CustomerGateway
+    Properties: 
+      Type: ipsec.1
+      BgpAsn: 65534
+      IpAddress: 12.1.2.3
+  VPNConnection: 
+    Type: AWS::EC2::VPNConnection
+    Properties:
+      CustomerGatewayId: !Ref VPNCustomerGateway
+      Type: ipsec.1
+      StaticRoutesOnly: true
+      VpnGatewayId: !Ref VPNGateway
+  VPNOnPremiseRoutes: 
+    Type: AWS::EC2::VPNConnectionRoute
+    Properties: 
+      DestinationCidrBlock: 192.168.0.0/21
+      VpnConnectionId: !Ref VPNConnection
+  AttachVpnGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId:
+        Ref: VPC
+      VpnGatewayId:
+        Ref: VPNGateway
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Private Routes to on premise
+  VPNRoutePropagation:
+    Type: AWS::EC2::VPNGatewayRoutePropagation
+    DependsOn: AttachVpnGateway
+    Properties:
+       RouteTableIds: 
+        - !Ref PrivateRouteTable
+       VpnGatewayId: !Ref VPNGateway
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet1
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet2
+
+Outputs:
+  VPC:
+    Description: A reference to the created VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: !Sub ${EnvironmentName}-VPCID
+  VPCPrivateRouteTable:
+    Description: Public Routing
+    Value: !Ref PrivateRouteTable
+    Export:
+      Name: !Sub ${EnvironmentName}-PRIV-RT
+  PrivateSubnets:
+    Description: A list of private subnets
+    Value: !Join [ ",", [ !Ref PrivateSubnet1, !Ref PrivateSubnet2 ] ]
+    Export:
+      Name: !Sub ${EnvironmentName}-PRIV-NETS
+  PrivateSubnet1:
+    Description: A reference to the private subnet in the 1st AZ
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: !Sub ${EnvironmentName}-PRI1-SN
+  PrivateSubnet2:
+    Description: A reference to the private subnet in the 2nd AZ
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: !Sub ${EnvironmentName}-PRI2-SN
