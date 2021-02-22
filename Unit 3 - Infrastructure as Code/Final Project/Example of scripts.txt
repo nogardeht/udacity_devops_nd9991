@@ -1,0 +1,2 @@
+../Scripts/upload-stack.sh FinalProject udagram-code.yml udagram-conf.json us-east-2
+../Scripts/delete-stack.sh FinalProject us-east-2
