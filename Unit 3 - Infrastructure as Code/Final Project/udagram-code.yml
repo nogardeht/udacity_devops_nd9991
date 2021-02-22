@@ -26,7 +26,28 @@ Parameters:
     Description: Please enter the IP range (CIDR notation) for this network
     Type: String
     Default: 10.0.3.0/24
+  WebServerInstanceType:
+    Description: Please enter the IP range (CIDR notation) for this network
+    Type: String
+    Default: t2.micro
+  BastionInstanceType:
+    Description: Please enter the IP range (CIDR notation) for this network
+    Type: String
+    Default: t2.micro
+  UdagramDesiredCapacity:
+    Description: AutoScaling group desired size
+    Type: String
+    Default: 1
+  UdagramMinCapacity:
+    Description: AutoScaling group min size
+    Type: String
+    Default: 1
+  UdagramMaxCapacity:
+    Description: AutoScaling group max size
+    Type: String
+    Default: 1
 Resources:
+  ###### Networking
   VPC:
     Type: AWS::EC2::VPC
     Properties:
@@ -176,19 +197,190 @@ Resources:
     Properties:
       RouteTableId: !Ref PrivateRouteTable2
       SubnetId: !Ref PrivateSubnet2
-  # instace profile contains the IAM Role name(s) that we want to associate to our auto scaling EC2 Servers
-  # never give too much permissions to your EC2 instances! if they get hacked, the permissions get hacked also!
-  # in this example, I create a Role called UdacityS3ReadOnlyC2 and just give it a policy of S3 Read-Only Access
-  #ProfileWithRolesForOurApp:
-  #  Type: AWS::IAM::InstanceProfile
-  #  Properties: 
-  #    Roles:
-  #      - UdacityS3ReadOnlyEC2
+  #### Servers
+  ALB1SecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http to ALB1
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+  WebServerSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http to our hosts and ssh from local only
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: !Ref VpcCIDR
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref VpcCIDR
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+  BastionSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow ssh to our hosts from internet
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+  UdacityS3ReadOnlyEC2:
+    Type: AWS::IAM::Role
+    Properties: 
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - 
+            Effect: 'Allow'
+            Principal: 
+              Service: 
+                - "ec2.amazonaws.com"
+            Action: 
+              - "sts:AssumeRole"
+      Description: "Udagram S3 Readonly role"
+      Policies: 
+        - PolicyDocument: 
+            Version: "2012-10-17"
+            Statement: 
+              - Effect: 'Allow'
+                Action: 
+                  - "s3:Get*"
+                  - "s3:List*"
+                Resource: "*"
+          PolicyName: "UdacityS3ReadOnlyEC2-Policy"
+      RoleName: "UdacityS3ReadOnlyEC2"
+  ProfileWithRolesForOurApp:
+    Type: AWS::IAM::InstanceProfile
+    Properties: 
+      Roles:
+        - Ref: UdacityS3ReadOnlyEC2
+  WebAppLaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          apt-get update -y
+          apt-get install apache2 -y
+          systemctl start apache2.service
+          cd /var/www/html
+          echo "Udacity Demo Web Server Up and Running!" > index.html
+      ImageId: ami-01b043d807a9122f7
+      IamInstanceProfile: !Ref ProfileWithRolesForOurApp
+      SecurityGroups:
+      - Ref: WebServerSecGroup
+      InstanceType: !Ref WebServerInstanceType
+      BlockDeviceMappings:
+      - DeviceName: "/dev/sdk"
+        Ebs:
+          VolumeSize: '10'
+  WebAppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 35
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 30
+      HealthyThresholdCount: 2
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 5
+      VpcId: !Ref VPC
+  WebAppLB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+      - !Ref PublicSubnet1
+      - !Ref PublicSubnet2
+      SecurityGroups:
+      - !Ref ALB1SecGroup
+  Listener:
+      Type: AWS::ElasticLoadBalancingV2::Listener
+      Properties:
+        DefaultActions:
+        - Type: forward
+          TargetGroupArn:
+            !Ref WebAppTargetGroup
+        LoadBalancerArn:
+          !Ref WebAppLB
+        Port: '80'
+        Protocol: HTTP
+  ALBListenerRule:
+      Type: AWS::ElasticLoadBalancingV2::ListenerRule
+      Properties:
+        Actions:
+        - Type: forward
+          TargetGroupArn: !Ref 'WebAppTargetGroup'
+        Conditions:
+        - Field: path-pattern
+          Values: [/]
+        ListenerArn: !Ref 'Listener'
+        Priority: 1
+  UdagramASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties: 
+      AutoScalingGroupName: !Sub ${EnvironmentName}-Udagram
+      DesiredCapacity: !Ref UdagramDesiredCapacity
+      HealthCheckGracePeriod: 300
+      HealthCheckType: "EC2"
+      LaunchConfigurationName: !Ref WebAppLaunchConfig
+      MaxSize: !Ref UdagramMaxCapacity
+      MinSize: !Ref UdagramMinCapacity
+      TargetGroupARNs: 
+        - !Ref WebAppTargetGroup
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      Tags:
+        - Key: Environment
+          Value: !Sub ${EnvironmentName}
+          PropagateAtLaunch: "true"
+        - Key: App
+          Value: "Udagram"
+          PropagateAtLaunch: "true"
+        - Key: Name
+          Value: "UdagramNode"
+          PropagateAtLaunch: "true"
+  BastionHost: 
+    Type: AWS::EC2::Instance
+    Properties: 
+      ImageId: "ami-01b043d807a9122f7"
+      KeyName: "kp-Linux"
+      InstanceType: !Ref BastionInstanceType
+      BlockDeviceMappings:
+        - DeviceName: "/dev/sdk"
+          Ebs:
+            VolumeSize: '10'
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: "true"
+          DeviceIndex: 0
+          SubnetId: !Ref PublicSubnet1
+          GroupSet:
+            - Ref: BastionSecGroup
 Outputs: 
-  # This is also optional.
-  # Bonus points for useful outputs!
-  # for example, if you create a Load Balancer
-  # it's nice to output the URL to it here, so that we don't have to go to the console to get it.
   VPC:
     Description: A reference to the created VPC ID
     Value: !Ref VPC
@@ -239,16 +431,15 @@ Outputs:
     Value: !Ref PrivateSubnet2
     Export:
       Name: !Sub ${EnvironmentName}-PRI2-SN
-# Sample UserData
-# When creating your Launch Configuration, you may need a UserData script
-# here's one that you can use for Ubuntu Linux that will:
-# Install Apache Web Server, Start it, and create an index.html that will be displayed
-# when you visit the IP address of this server with your web browser
-#Here it is:
-#
-#          #!/bin/bash
-#          apt-get update -y
-#          apt-get install apache2 -y
-#          systemctl start apache2.service
-#          cd /var/www/html
-#          echo "Udacity Demo Web Server Up and Running!" > index.html
+  ALB1Endpoint:
+    Description: ALB1 Endpoint URL
+    Value: !Join [ "://", [ "http", Fn::GetAtt: [ "WebAppLB", "DNSName" ] ] ]
+    Export:
+      Name: !Sub ${EnvironmentName}-ALB1Endpoint
+  BastionPublicDNSName:
+    Description: Bastion Public DNS name for access
+    Value: 
+      Fn::GetAtt: [ "BastionHost", "PublicDnsName" ]
+    Export:
+      Name: !Sub ${EnvironmentName}-BastionPublicDNSName
+

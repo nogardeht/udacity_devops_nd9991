@@ -4,7 +4,7 @@ then
     stackStatus=$(aws cloudformation describe-stacks --stack-name ${1} --output text --query "Stacks[*].{Status:StackStatus}")
     if [[ $? -eq 0 ]]
     then
-        aws cloudformation update-stack --stack-name ${1} --template-body file://${2} --parameters file://${3} --region=${4}
+        aws cloudformation update-stack --stack-name ${1} --template-body file://${2} --parameters file://${3} --region=${4} --capabilities CAPABILITY_NAMED_IAM
         if [[ $? -eq 0 ]]
         then
             exit 0
@@ -20,7 +20,7 @@ then
             done
         fi
     fi
-    aws cloudformation create-stack --stack-name ${1} --template-body file://${2} --parameters file://${3} --region=${4}
+    aws cloudformation create-stack --stack-name ${1} --template-body file://${2} --parameters file://${3} --region=${4} --capabilities CAPABILITY_NAMED_IAM
 else
     echo "usage: ./upload-stack.sh <stack_name> <filename> <parameters> <region> [-f]"
 fi
